@@ -3,23 +3,29 @@ import numpy as np
 import gym
 import argparse
 
+"""
+BareBones Policy Gradient
+"""
 
 class Network:
-    def __init__(self, sizes, obs_dim, n_acts, lr, activation=tf.tanh, output_activation=None):
+    def __init__(self, sizes, obs_dim, act_dim, lr, activation=tf.tanh, output_activation=None):
 
         # policy network
         self.obs_ph = tf.placeholder(shape=(None, obs_dim), dtype=tf.float32)
+
         x = self.obs_ph
         for size in sizes[:-1]:
             x = tf.layers.dense(x, units=size, activation=activation)
         logits = tf.layers.dense(x, units=sizes[-1], activation=output_activation)
+
+        self.weights_ph = tf.placeholder(shape=(None,), dtype=tf.float32)
+        self.act_ph = tf.placeholder(shape=(None,), dtype=tf.int32)
+        action_masks = tf.one_hot(self.act_ph, act_dim)
+
         # sample actions
         self.actions = tf.squeeze(tf.multinomial(logits=logits, num_samples=1), axis=1)
 
         # loss function
-        self.weights_ph = tf.placeholder(shape=(None,), dtype=tf.float32)
-        self.act_ph = tf.placeholder(shape=(None,), dtype=tf.int32)
-        action_masks = tf.one_hot(self.act_ph, n_acts)
         log_probs = tf.reduce_sum(action_masks * tf.nn.log_softmax(logits), axis=1)
         self.loss = -tf.reduce_mean(self.weights_ph * log_probs)
 
@@ -39,13 +45,12 @@ def train(env_name='CartPole-v0', hidden_sizes=[32], lr=1e-2, epochs=5, batch_si
 
     env = gym.make(env_name)
     obs_dim = env.observation_space.shape[0]
-    n_acts = env.action_space.n
+    act_dim = env.action_space.n
 
-    net = Network(sizes=hidden_sizes+[n_acts], obs_dim=obs_dim, n_acts=n_acts, lr=lr)
+    net = Network(sizes=hidden_sizes+[act_dim], obs_dim=obs_dim, act_dim=act_dim, lr=lr)
 
     sess = tf.InteractiveSession()
     sess.run(tf.global_variables_initializer())
-
 
     def train_one_epoch():
         batch_obs = []          # observations
@@ -57,7 +62,6 @@ def train(env_name='CartPole-v0', hidden_sizes=[32], lr=1e-2, epochs=5, batch_si
 
         obs = env.reset()
         done = False
-
         first_ep = True
 
         while True:
@@ -66,6 +70,7 @@ def train(env_name='CartPole-v0', hidden_sizes=[32], lr=1e-2, epochs=5, batch_si
 
             batch_obs.append(obs.copy())
 
+            # get action from network
             a = sess.run(net.actions, { net.obs_ph: obs.reshape(1,-1) })[0]
             obs, r, done, _ = env.step(a)
 
@@ -77,15 +82,18 @@ def train(env_name='CartPole-v0', hidden_sizes=[32], lr=1e-2, epochs=5, batch_si
                 batch_rets.append(ep_ret)
                 batch_lens.append(ep_len)
 
-                batch_weights += [ep_ret] * ep_len              # full R(tau)
-                # batch_weights += list(reward_to_go(rewards))    # R to go
+                # # full R(tau) for each step of ep
+                # batch_weights += [ep_ret] * ep_len
+
+                # R to go for each step of ep
+                batch_weights += list(reward_to_go(rewards))
 
                 # reset
                 obs, done, rewards = env.reset(), False, []
                 first_ep = False
 
                 if len(batch_obs) > batch_size:
-                    # if not enough experience
+                    # if enough experience to train break
                     break
 
         # policy gradient update step
@@ -107,7 +115,7 @@ def train(env_name='CartPole-v0', hidden_sizes=[32], lr=1e-2, epochs=5, batch_si
 if __name__ == '__main__':
     print('\nVanilla Policy Gradient.\n')
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env_name', '--env', type=str, default='CartPole-v0')
+    parser.add_argument('--env_name', type=str, default='CartPole-v0')
     parser.add_argument('--render', type=bool, default=True)
     parser.add_argument('--epochs', type=str, default=5)
     parser.add_argument('--lr', type=float, default=1e-2)

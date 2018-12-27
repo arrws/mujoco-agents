@@ -1,6 +1,69 @@
 
 import numpy as np
+import tensorflow as tf
+from gym.spaces import Box, Discrete
 import scipy.signal
+
+
+# NETWORK HELPERS
+
+def placeholder(dim=None):
+    return tf.placeholder(dtype=tf.float32, shape=combined_shape(None,dim))
+
+def placeholders(*args):
+    return [placeholder(dim) for dim in args]
+
+def placeholder_from_space(space):
+    if isinstance(space, Box):
+        return placeholder(space.shape)
+    elif isinstance(space, Discrete):
+        return tf.placeholder(dtype=tf.int32, shape=(None,))
+    raise NotImplementedError
+
+def placeholders_from_spaces(*args):
+    return [placeholder_from_space(space) for space in args]
+
+def get_policy(action_space):
+    policy = None
+    if isinstance(action_space, Box):
+        policy = mlp_gaussian_policy
+    elif isinstance(action_space, Discrete):
+        policy = mlp_categorical_policy
+    return policy
+
+def mlp_categorical_policy(x, a, hidden_sizes, activation, output_activation, action_space):
+    act_dim = action_space.n
+    logits = mlp(x, list(hidden_sizes)+[act_dim], activation, None)
+    logp_all = tf.nn.log_softmax(logits)
+    pi = tf.squeeze(tf.multinomial(logits,1), axis=1)
+    logp = tf.reduce_sum(tf.one_hot(a, depth=act_dim) * logp_all, axis=1)
+    logp_pi = tf.reduce_sum(tf.one_hot(pi, depth=act_dim) * logp_all, axis=1)
+    return pi, logp, logp_pi
+
+
+def mlp_gaussian_policy(x, a, hidden_sizes, activation, output_activation, action_space):
+    act_dim = a.shape.as_list()[-1]
+    mu = mlp(x, list(hidden_sizes)+[act_dim], activation, output_activation)
+    log_std = tf.get_variable(name='log_std', initializer=-0.5*np.ones(act_dim, dtype=np.float32))
+    std = tf.exp(log_std)
+    pi = mu + tf.random_normal(tf.shape(mu)) * std
+    logp = gaussian_likelihood(a, mu, log_std)
+    logp_pi = gaussian_likelihood(pi, mu, log_std)
+    return pi, logp, logp_pi
+
+
+def mlp(x, hidden_sizes=(32,), activation=tf.tanh, output_activation=None):
+    for h in hidden_sizes[:-1]:
+        x = tf.layers.dense(x, units=h, activation=activation)
+    return tf.layers.dense(x, units=hidden_sizes[-1], activation=output_activation)
+
+
+def get_vars(scope=''):
+    return [x for x in tf.trainable_variables() if scope in x.name]
+
+def count_vars(scope=''):
+    v = get_vars(scope)
+    return sum([np.prod(var.shape.as_list()) for var in v])
 
 
 def combined_shape(length, shape=None):
@@ -27,17 +90,12 @@ class Logger:
         if val is not None:
             print(key,'\t',val)
         else:
-            # vals = np.concatenate(v) if isinstance(v[0], np.ndarray) and len(v[0].shape)>0 else v
-
             stats = get_stats(self.data[key])
-
-            print('Avg '+key,'\t', stats[0])
+            print(key + '\tAvg\t', stats[0])
             if not(average_only):
-                print('Std '+key,'\t', stats[1])
+                print('\tStd\t', stats[1])
             if with_min_and_max:
-                print('Max '+key,'\t', stats[2])
-                print('Min '+key,'\t', stats[3])
-
+                print('\tMn/Mx\t', stats[3], '\t', stats[2])
         self.data[key] = []
 
 
@@ -111,7 +169,10 @@ class Buffer:
 
         adv_mean, adv_std, _, _ = get_stats(self.adv_buf)
 
-        self.adv_buf = (self.adv_buf - adv_mean) / adv_std
+        self.adv_buf = self.adv_buf - adv_mean
+        if adv_std != 0:
+            self.adv_buf /= adv_std
+
         return [self.obs_buf, self.act_buf, self.adv_buf, self.ret_buf, self.logp_buf]
 
     def discount_cumsum(self, x, discount):

@@ -2,11 +2,15 @@ import numpy as np
 import tensorflow as tf
 import gym
 import time
-# from spinup.algos.sac import core
-# from spinup.algos.sac.core import get_vars
-# from spinup.utils.logx import EpochLogger
 
 from common import *
+
+
+"""
+Soft Actor-Critic (like TD3)
+
+"""
+
 
 class ReplayBuffer:
 
@@ -37,26 +41,6 @@ class ReplayBuffer:
 
 
 
-def placeholder(dim=None):
-    return tf.placeholder(dtype=tf.float32, shape=combined_shape(None,dim))
-
-def placeholders(*args):
-    return [placeholder(dim) for dim in args]
-
-def placeholder_from_space(space):
-    if isinstance(space, Box):
-        return placeholder(space.shape)
-    elif isinstance(space, Discrete):
-        return tf.placeholder(dtype=tf.int32, shape=(None,))
-    raise NotImplementedError
-
-def placeholders_from_spaces(*args):
-    return [placeholder_from_space(space) for space in args]
-
-def mlp(x, hidden_sizes=(32,), activation=tf.tanh, output_activation=None):
-    for h in hidden_sizes[:-1]:
-        x = tf.layers.dense(x, units=h, activation=activation)
-    return tf.layers.dense(x, units=hidden_sizes[-1], activation=output_activation)
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
@@ -107,14 +91,14 @@ def apply_squashing_func(mu, pi, logp_pi):
 Actor-Critics
 """
 def actor_critic(x, a, hidden_sizes=(400,300), activation=tf.nn.relu,
-                     output_activation=None, policy=gaussian_policy, action_space=None):
+                     output_activation=None, policy=gaussian_policy, act_space=None):
     # policy
     with tf.variable_scope('pi'):
         mu, pi, logp_pi = policy(x, a, hidden_sizes, activation, output_activation)
         mu, pi, logp_pi = apply_squashing_func(mu, pi, logp_pi)
 
     # make sure actions are in correct range
-    action_scale = action_space.high[0]
+    action_scale = act_space.high[0]
     mu *= action_scale
     pi *= action_scale
 
@@ -144,18 +128,18 @@ def clip_but_pass_gradient(x, l=-1., u=1.):
 
 
 class Network:
-    def __init__(self, hidden_sizes=(63,64), activation=tf.tanh, output_activation=None, policy=None, action_space=None, observation_space=None, gamma=0.99, polyak=0.995,  lr=1e-3, alpha=0.2):
+    def __init__(self, hidden_sizes=(63,64), activation=tf.tanh, output_activation=None, policy=None, act_space=None, obs_space=None, gamma=0.99, polyak=0.995,  lr=1e-3, alpha=0.2):
 
         # Inputs to computation graph
-        self.x_ph, self.a_ph, self.x2_ph, self.r_ph, self.d_ph = placeholders(observation_space.shape, action_space.shape, observation_space.shape, None, None)
+        self.x_ph, self.a_ph, self.x2_ph, self.r_ph, self.d_ph = placeholders(obs_space.shape, act_space.shape, obs_space.shape, None, None)
 
         # Main outputs from computation graph
         with tf.variable_scope('main'):
-            self.mu, self.pi, self.logp_pi, self.q1, self.q2, self.q1_pi, self.q2_pi, self.v = actor_critic(self.x_ph, self.a_ph, hidden_sizes, action_space = action_space)
+            self.mu, self.pi, self.logp_pi, self.q1, self.q2, self.q1_pi, self.q2_pi, self.v = actor_critic(self.x_ph, self.a_ph, hidden_sizes, act_space = act_space)
 
         # Target value network
         with tf.variable_scope('target'):
-            _, _, _, _, _, _, _, self.v_targ  = actor_critic(self.x2_ph, self.a_ph, hidden_sizes, action_space = action_space)
+            _, _, _, _, _, _, _, self.v_targ  = actor_critic(self.x2_ph, self.a_ph, hidden_sizes, act_space = act_space)
 
         # Min Double-Q:
         self.min_q_pi = tf.minimum(self.q1_pi, self.q2_pi)
@@ -203,59 +187,30 @@ class Network:
                                   for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
 
 
-"""
-Soft Actor-Critic
-(With slight variations that bring it closer to TD3)
-"""
-def sac(env_fn, actor_critic=actor_critic, ac_kwargs=dict(), seed=0,
-        steps_per_epoch=5000, epochs=100, replay_size=int(1e6), gamma=0.99,
-        polyak=0.995, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000,
-        max_ep_len=1000, logger_kwargs=dict(), save_freq=1):
-
+def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=int(1e6), gamma=0.99, polyak=0.995, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, max_ep_len=1000):
 
     logger = Logger()
 
-    tf.set_random_seed(seed)
-    np.random.seed(seed)
-
-    env, test_env = env_fn(), env_fn()
+    # Environment
+    env, test_env = gym.make(env_name), gym.make(env_name)
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
-
+    kwargs['obs_space'] = env.observation_space
+    kwargs['act_space'] = env.action_space
     # Action limit for clamping: critically, assumes all dimensions share the same bound!
     act_limit = env.action_space.high[0]
 
-    # Share information about action space with policy architecture
-    ac_kwargs['action_space'] = env.action_space
-    ac_kwargs['observation_space'] = env.observation_space
-
-    # Experience buffer
+    # Experience Replay
     buf = ReplayBuffer(obs_dim=obs_dim, act_dim=act_dim, size=replay_size)
 
-    # Count variables
-    def get_vars(scope=''):
-        return [x for x in tf.trainable_variables() if scope in x.name]
-    def count_vars(scope=''):
-        v = get_vars(scope)
-        return sum([np.prod(var.shape.as_list()) for var in v])
-    var_counts = tuple(count_vars(scope) for scope in
-                       ['main/pi', 'main/q1', 'main/q2', 'main/v', 'main'])
-    print(('\nNumber of parameters: \t pi: %d, \t' + \
-           'q1: %d, \t q2: %d, \t v: %d, \t total: %d\n')%var_counts)
-
-
-
-    print(ac_kwargs)
-    net = Network(**ac_kwargs)
-
+    # Network
+    print(kwargs)
+    net = Network(**kwargs)
 
     sess = tf.Session()
     sess.run(tf.global_variables_initializer())
     sess.run(net.target_init)
 
-    # # Setup model saving
-    # logger.setup_tf_saver(sess, inputs={'x': x_ph, 'a': a_ph},
-    #                             outputs={'mu': mu, 'pi': pi, 'q1': q1, 'q2': q2, 'v': v})
 
     def get_action(o, deterministic=False):
         act_op = net.mu if deterministic else net.pi
@@ -356,23 +311,19 @@ def sac(env_fn, actor_critic=actor_critic, ac_kwargs=dict(), seed=0,
             logger.log('LossQ2', average_only=True)
             logger.log('LossV', average_only=True)
             logger.log('Time', time.time()-start_time)
+            print("")
+
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', type=str, default='MountainCarContinuous-v0')
     parser.add_argument('--hid', type=int, default=300)
-    parser.add_argument('--l', type=int, default=1)
+    parser.add_argument('--layers', type=int, default=1)
     parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--exp_name', type=str, default='sac')
     args = parser.parse_args()
 
-    from spinup.utils.run_utils import setup_logger_kwargs
-    logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
+    sac(env_name = args.env, kwargs=dict(hidden_sizes=[args.hid]*args.layers),
+        gamma=args.gamma, epochs=args.epochs)
 
-    sac(lambda : gym.make(args.env), actor_critic=actor_critic,
-        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l),
-        gamma=args.gamma, seed=args.seed, epochs=args.epochs,
-        logger_kwargs=logger_kwargs)
