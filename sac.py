@@ -4,128 +4,13 @@ import gym
 import time
 
 from common import *
+from sac_utils import *
 
 
 """
 Soft Actor-Critic (like TD3)
 
 """
-
-
-class ReplayBuffer:
-
-    def __init__(self, obs_dim, act_dim, size):
-        self.obs1_buf = np.zeros([size, obs_dim], dtype=np.float32)
-        self.obs2_buf = np.zeros([size, obs_dim], dtype=np.float32)
-        self.acts_buf = np.zeros([size, act_dim], dtype=np.float32)
-        self.rews_buf = np.zeros(size, dtype=np.float32)
-        self.done_buf = np.zeros(size, dtype=np.float32)
-        self.ptr, self.size, self.max_size = 0, 0, size
-
-    def store(self, obs, act, rew, next_obs, done):
-        self.obs1_buf[self.ptr] = obs
-        self.obs2_buf[self.ptr] = next_obs
-        self.acts_buf[self.ptr] = act
-        self.rews_buf[self.ptr] = rew
-        self.done_buf[self.ptr] = done
-        self.ptr = (self.ptr+1) % self.max_size
-        self.size = min(self.size+1, self.max_size)
-
-    def sample_batch(self, batch_size=32):
-        idxs = np.random.randint(0, self.size, size=batch_size)
-        return dict(obs1=self.obs1_buf[idxs],
-                    obs2=self.obs2_buf[idxs],
-                    acts=self.acts_buf[idxs],
-                    rews=self.rews_buf[idxs],
-                    done=self.done_buf[idxs])
-
-
-
-
-LOG_STD_MAX = 2
-LOG_STD_MIN = -20
-
-EPS = 1e-8
-
-def gaussian_policy(x, a, hidden_sizes, activation, output_activation):
-    act_dim = a.shape.as_list()[-1]
-    net = mlp(x, list(hidden_sizes), activation, activation)
-    mu = tf.layers.dense(net, act_dim, activation=output_activation)
-
-    """
-    Because algorithm maximizes trade-off of reward and entropy,
-    entropy must be unique to state---and therefore log_stds need
-    to be a neural network output instead of a shared-across-states
-    learnable parameter vector. But for deep Relu and other nets,
-    simply sticking an activationless dense layer at the end would
-    be quite bad---at the beginning of training, a randomly initialized
-    net could produce extremely large values for the log_stds, which
-    would result in some actions being either entirely deterministic
-    or too random to come back to earth. Either of these introduces
-    numerical instability which could break the algorithm. To
-    protect against that, we'll constrain the output range of the
-    log_stds, to lie within [LOG_STD_MIN, LOG_STD_MAX]. This is
-    slightly different from the trick used by the original authors of
-    SAC---they used tf.clip_by_value instead of squashing and rescaling.
-    I prefer this approach because it allows gradient propagation
-    through log_std where clipping wouldn't, but I don't know if
-    it makes much of a difference.
-    """
-    log_std = tf.layers.dense(net, act_dim, activation=tf.tanh)
-    log_std = LOG_STD_MIN + 0.5 * (LOG_STD_MAX - LOG_STD_MIN) * (log_std + 1)
-
-    std = tf.exp(log_std)
-    pi = mu + tf.random_normal(tf.shape(mu)) * std
-    logp_pi = gaussian_likelihood(pi, mu, log_std)
-    return mu, pi, logp_pi
-
-def apply_squashing_func(mu, pi, logp_pi):
-    mu = tf.tanh(mu)
-    pi = tf.tanh(pi)
-    # To avoid evil machine precision error, strictly clip 1-pi**2 to [0,1] range.
-    logp_pi -= tf.reduce_sum(tf.log(clip_but_pass_gradient(1 - pi**2, l=0, u=1) + 1e-6), axis=1)
-    return mu, pi, logp_pi
-
-
-"""
-Actor-Critics
-"""
-def actor_critic(x, a, hidden_sizes=(400,300), activation=tf.nn.relu,
-                     output_activation=None, policy=gaussian_policy, act_space=None):
-    # policy
-    with tf.variable_scope('pi'):
-        mu, pi, logp_pi = policy(x, a, hidden_sizes, activation, output_activation)
-        mu, pi, logp_pi = apply_squashing_func(mu, pi, logp_pi)
-
-    # make sure actions are in correct range
-    action_scale = act_space.high[0]
-    mu *= action_scale
-    pi *= action_scale
-
-    # vfs
-    vf_mlp = lambda x : tf.squeeze(mlp(x, list(hidden_sizes)+[1], activation, None), axis=1)
-    with tf.variable_scope('q1'):
-        q1 = vf_mlp(tf.concat([x,a], axis=-1))
-    with tf.variable_scope('q1', reuse=True):
-        q1_pi = vf_mlp(tf.concat([x,pi], axis=-1))
-    with tf.variable_scope('q2'):
-        q2 = vf_mlp(tf.concat([x,a], axis=-1))
-    with tf.variable_scope('q2', reuse=True):
-        q2_pi = vf_mlp(tf.concat([x,pi], axis=-1))
-    with tf.variable_scope('v'):
-        v = vf_mlp(x)
-    return mu, pi, logp_pi, q1, q2, q1_pi, q2_pi, v
-
-
-def gaussian_likelihood(x, mu, log_std):
-    pre_sum = -0.5 * (((x-mu)/(tf.exp(log_std)+EPS))**2 + 2*log_std + np.log(2*np.pi))
-    return tf.reduce_sum(pre_sum, axis=1)
-
-def clip_but_pass_gradient(x, l=-1., u=1.):
-    clip_up = tf.cast(x > u, tf.float32)
-    clip_low = tf.cast(x < l, tf.float32)
-    return x + tf.stop_gradient((u - x)*clip_up + (l - x)*clip_low)
-
 
 class Network:
     def __init__(self, hidden_sizes=(63,64), activation=tf.tanh, output_activation=None, policy=None, act_space=None, obs_space=None, gamma=0.99, polyak=0.995,  lr=1e-3, alpha=0.2):
@@ -187,6 +72,7 @@ class Network:
                                   for v_main, v_targ in zip(get_vars('main'), get_vars('target'))])
 
 
+
 def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=int(1e6), gamma=0.99, polyak=0.995, lr=1e-3, alpha=0.2, batch_size=100, start_steps=10000, max_ep_len=1000):
 
     logger = Logger()
@@ -227,46 +113,32 @@ def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=i
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
 
+
+
     start_time = time.time()
     obs, r, done, ep_ret, ep_len = env.reset(), 0, False, 0, 0
     total_steps = steps_per_epoch * epochs
 
-    # Main loop: collect experience in env and update/log each epoch
-    for t in range(total_steps):
-
-        """
-        Until start_steps have elapsed, randomly sample actions
-        from a uniform distribution for better exploration. Afterwards,
-        use the learned policy.
-        """
-        if t > start_steps:
+    # MAIN LOOP
+    for step in range(total_steps):
+        # random sample while start_steps then learned policy
+        if step > start_steps:
             a = get_action(o)
         else:
             a = env.action_space.sample()
 
-        # Step the env
         obs2, r, done, _ = env.step(a)
         ep_ret += r
         ep_len += 1
 
-        # Ignore the "done" signal if it comes from hitting the time
-        # horizon (that is, when it's an artificial terminal signal
-        # that isn't based on the agent's state)
+        # ignore the "done" signal if not based on the agent's state
         done = False if ep_len==max_ep_len else done
 
-        # Store experience to replay buffer
         buf.store(obs, a, r, obs2, done)
-
-        # Super critical, easy to overlook step: make sure to update
-        # most recent observation!
         obs = obs2
 
         if done or (ep_len == max_ep_len):
-            """
-            Perform all SAC updates at the end of the trajectory.
-            This is a slight difference from the SAC specified in the
-            original paper.
-            """
+            # Perform all SAC updates at the end of the trajectory.
             for j in range(ep_len):
                 batch = buf.sample_batch(batch_size)
                 feed_dict = {net.x_ph: batch['obs1'],
@@ -285,12 +157,8 @@ def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=i
 
 
         # End of epoch wrap-up
-        if t > 0 and t % steps_per_epoch == 0:
-            epoch = t // steps_per_epoch
-
-            # # Save model
-            # if (epoch % save_freq == 0) or (epoch == epochs-1):
-            #     logger.save_state({'env': env}, None)
+        if step > 0 and step % steps_per_epoch == 0:
+            epoch = step // steps_per_epoch
 
             # Test the performance of the deterministic version of the agent.
             test_agent()
