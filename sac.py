@@ -100,13 +100,13 @@ def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=i
 
     def get_action(obs, deterministic=False):
         act_op = net.mu if deterministic else net.pi
-        return sess.run(act_op, feed_dict={net.x_ph: o.reshape(1,-1)})[0]
+        return sess.run(act_op, feed_dict={net.x_ph: obs.reshape(1,-1)})[0]
 
     def test_agent(n=10):
         global sess, pi, q1, q2, q1_pi, q2_pi
         for j in range(n):
             obs, r, done, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
-            while not(d or (ep_len == max_ep_len)):
+            while not(done or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time
                 obs, r, done, _ = test_env.step(get_action(obs, True))
                 ep_ret += r
@@ -123,7 +123,7 @@ def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=i
     for step in range(total_steps):
         # random sample while start_steps then learned policy
         if step > start_steps:
-            a = get_action(o)
+            a = get_action(obs)
         else:
             a = env.action_space.sample()
 
@@ -169,7 +169,7 @@ def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=i
             logger.log('TestEpRet', with_min_and_max=True)
             logger.log('EpLen', average_only=True)
             logger.log('TestEpLen', average_only=True)
-            logger.log('TotalEnvInteracts', t)
+            logger.log('TotalEnvInteracts', step)
             logger.log('Q1Vals', with_min_and_max=True)
             logger.log('Q2Vals', with_min_and_max=True)
             logger.log('VVals', with_min_and_max=True)
