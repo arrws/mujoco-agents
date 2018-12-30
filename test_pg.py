@@ -3,9 +3,12 @@ import numpy as np
 import gym
 import argparse
 
+
 """
-BareBones Policy Gradient
+Test Bare Bones Policy Gradient
+
 """
+
 
 class Network:
     def __init__(self, sizes, obs_dim, act_dim, lr, activation=tf.tanh, output_activation=None):

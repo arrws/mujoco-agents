@@ -212,23 +212,23 @@ def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=i
     sess.run(net.target_init)
 
 
-    def get_action(o, deterministic=False):
+    def get_action(obs, deterministic=False):
         act_op = net.mu if deterministic else net.pi
         return sess.run(act_op, feed_dict={net.x_ph: o.reshape(1,-1)})[0]
 
     def test_agent(n=10):
         global sess, pi, q1, q2, q1_pi, q2_pi
         for j in range(n):
-            o, r, d, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
+            obs, r, done, ep_ret, ep_len = test_env.reset(), 0, False, 0, 0
             while not(d or (ep_len == max_ep_len)):
                 # Take deterministic actions at test time
-                o, r, d, _ = test_env.step(get_action(o, True))
+                obs, r, done, _ = test_env.step(get_action(obs, True))
                 ep_ret += r
                 ep_len += 1
             logger.store(TestEpRet=ep_ret, TestEpLen=ep_len)
 
     start_time = time.time()
-    o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+    obs, r, done, ep_ret, ep_len = env.reset(), 0, False, 0, 0
     total_steps = steps_per_epoch * epochs
 
     # Main loop: collect experience in env and update/log each epoch
@@ -245,23 +245,23 @@ def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=i
             a = env.action_space.sample()
 
         # Step the env
-        o2, r, d, _ = env.step(a)
+        obs2, r, done, _ = env.step(a)
         ep_ret += r
         ep_len += 1
 
         # Ignore the "done" signal if it comes from hitting the time
         # horizon (that is, when it's an artificial terminal signal
         # that isn't based on the agent's state)
-        d = False if ep_len==max_ep_len else d
+        done = False if ep_len==max_ep_len else done
 
         # Store experience to replay buffer
-        buf.store(o, a, r, o2, d)
+        buf.store(obs, a, r, obs2, done)
 
         # Super critical, easy to overlook step: make sure to update
         # most recent observation!
-        o = o2
+        obs = obs2
 
-        if d or (ep_len == max_ep_len):
+        if done or (ep_len == max_ep_len):
             """
             Perform all SAC updates at the end of the trajectory.
             This is a slight difference from the SAC specified in the
@@ -281,7 +281,7 @@ def sac(env_name, kwargs=dict(), steps_per_epoch=5000, epochs=100, replay_size=i
                              VVals=outs[6], LogPi=outs[7])
 
             logger.store(EpRet=ep_ret, EpLen=ep_len)
-            o, r, d, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+            obs, r, done, ep_ret, ep_len = env.reset(), 0, False, 0, 0
 
 
         # End of epoch wrap-up
