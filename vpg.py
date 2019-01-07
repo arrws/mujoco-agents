@@ -4,6 +4,7 @@ import gym
 from gym.spaces import Box, Discrete
 import time
 
+from tensorboardX import SummaryWriter
 from common import *
 
 
@@ -89,8 +90,14 @@ def vpg(env_name, kwargs=dict(), steps_per_epoch=4000, epochs=50, gamma=0.99, tr
     obs, r, done, ep_ret, ep_len = env.reset(), 0, False, 0, 0
 
     # MAIN LOOP
+    writer = SummaryWriter('runs/VPG')
+    episodes = 0
+
     for epoch in range(epochs):
+        render_env = True
         for step in range(steps_per_epoch):
+            if render_env:
+                env.render()
 
             # get next action
             a, v_t, logp_t = sess.run(net.get_action_ops, feed_dict={net.x_ph: obs.reshape(1,-1)})
@@ -108,12 +115,16 @@ def vpg(env_name, kwargs=dict(), steps_per_epoch=4000, epochs=50, gamma=0.99, tr
                 last_val = r if done else sess.run(net.v, feed_dict={net.x_ph: obs.reshape(1,-1)})
                 buf.finish_path(last_val)
 
+                episodes += 1
+                writer.add_scalar('episode length', ep_len, episodes)
+                writer.add_scalar('episode return', ep_len, episodes)
                 if done or (ep_len == max_ep_len):
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
                 else:
                     print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
 
                 obs, r, done, ep_ret, ep_len = env.reset(), 0, False, 0, 0
+                render_env = False
 
         # perform VPG update
         update()
@@ -133,6 +144,8 @@ def vpg(env_name, kwargs=dict(), steps_per_epoch=4000, epochs=50, gamma=0.99, tr
         logger.log('Time', time.time()-start_time)
         print("")
 
+    writer.close()
+
 
 if __name__ == '__main__':
     import argparse
@@ -142,7 +155,7 @@ if __name__ == '__main__':
     parser.add_argument('--layers', type=int, default=2)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--steps', type=int, default=4000)
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--epochs', type=int, default=20)
     args = parser.parse_args()
 
     vpg(env_name = args.env, kwargs=dict(hidden_sizes=[args.hid]*args.layers),
