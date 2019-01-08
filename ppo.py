@@ -19,12 +19,14 @@ class Network:
         print(act_space, obs_space)
 
         # Inputs to computation graph
-        self.x_ph, self.a_ph = placeholders_from_spaces(obs_space, act_space)
-        self.adv_ph, self.ret_ph, self.logp_ph = placeholders(None, None, None)
+        self.x_ph, self.a_ph = placeholders_from_spaces(obs_space, act_space)   # states, actions
+        self.adv_ph, self.ret_ph, self.logp_ph = placeholders(None, None, None) # advantage, return logp for policy
+
         # easy retrieve [obs, actions, advantage, returns, logprob]
         self.all_phs = [self.x_ph, self.a_ph, self.adv_ph, self.ret_ph, self.logp_ph]
 
-        policy = get_policy(act_space)
+        # Policy and Value function
+        policy = get_policy(act_space)  # retrieve policy layer for continuos or discreete actions
         self.pi, self.logp, self.logp_pi = policy(self.x_ph, self.a_ph, hidden_sizes, activation, output_activation, act_space)
         self.v = tf.squeeze(mlp(self.x_ph, list(hidden_sizes)+[1], activation, None), axis=1)
 
@@ -32,8 +34,10 @@ class Network:
         self.get_action_ops = [self.pi, self.v, self.logp_pi]
 
         # PPO objectives
-        ratio = tf.exp(self.logp - self.logp_ph)          # pi(a|s) / pi_old(a|s)
-        min_adv = tf.where(self.adv_ph>0, (1+clip_ratio)*self.adv_ph, (1-clip_ratio)*self.adv_ph)
+        ratio = tf.exp(self.logp - self.logp_ph)    # ration between new and old policy: pi(a|s) / pi_old(a|s)
+        min_adv = tf.where(self.adv_ph>0, (1+clip_ratio)*self.adv_ph, (1-clip_ratio)*self.adv_ph)   # clipping of the advantage
+
+        # Losses
         self.pi_loss = -tf.reduce_mean(tf.minimum(ratio * self.adv_ph, min_adv))
         self.v_loss = tf.reduce_mean((self.ret_ph - self.v)**2)
 
@@ -41,7 +45,7 @@ class Network:
         self.approx_kl = tf.reduce_mean(self.logp_ph - self.logp)     # sample estimate for kl-divergence
         self.approx_ent = tf.reduce_mean(-self.logp)                  # sample estimate for entropy
         self.clipped = tf.logical_or(ratio > (1+clip_ratio), ratio < (1-clip_ratio))
-        self.clipfrac = tf.reduce_mean(tf.cast(self.clipped, tf.float32))
+        self.clipfrac = tf.reduce_mean(tf.cast(self.clipped, tf.float32))   # sample clipping percentage
 
         # optimizers
         self.train_pi = tf.train.AdamOptimizer(learning_rate=pi_lr).minimize(self.pi_loss)
@@ -78,6 +82,8 @@ def ppo(env_name, kwargs=dict(), steps_per_epoch=4000, epochs=50, gamma=0.99, cl
         # Policy gradient step
         for i in range(train_pi_iters):
             _, kl = sess.run([net.train_pi, net.approx_kl], feed_dict=inputs)
+
+            # check early stopping
             if kl > 1.5 * target_kl:
                 print('Early stopping at step %d due to reaching max kl.'%i)
                 break
@@ -97,6 +103,7 @@ def ppo(env_name, kwargs=dict(), steps_per_epoch=4000, epochs=50, gamma=0.99, cl
                      dLossV=(v_loss_new - v_loss))
 
 
+    # reset environment
     start_time = time.time()
     obs, r, done, ep_ret, ep_len = env.reset(), 0, False, 0, 0
 
@@ -124,8 +131,11 @@ def ppo(env_name, kwargs=dict(), steps_per_epoch=4000, epochs=50, gamma=0.99, cl
             if done or (ep_len == max_ep_len) or (step == steps_per_epoch-1):
                 # if trajectory didn't reach terminal state, bootstrap value target
                 last_val = r if done else sess.run(net.v, feed_dict={net.x_ph: obs.reshape(1,-1)})
+
+                # compute cummulative returns
                 buf.finish_path(last_val)
 
+                # print and log
                 episodes += 1
                 writer.add_scalar('episode length', ep_len, episodes)
                 writer.add_scalar('episode return', ep_len, episodes)
@@ -134,9 +144,9 @@ def ppo(env_name, kwargs=dict(), steps_per_epoch=4000, epochs=50, gamma=0.99, cl
                 else:
                     print('Warning: trajectory cut off by epoch at %d steps.'%ep_len)
 
+                # reset environment
                 obs, r, done, ep_ret, ep_len = env.reset(), 0, False, 0, 0
                 render_env = False
-
 
         # perform PPO update
         update()

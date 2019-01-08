@@ -30,11 +30,13 @@ def placeholders_from_spaces(*args):
 
 
 def mlp(x, hidden_sizes=(32,), activation=tf.tanh, output_activation=None):
+    # multi-layered-perceptron
     for h in hidden_sizes[:-1]:
         x = tf.layers.dense(x, units=h, activation=activation)
     return tf.layers.dense(x, units=hidden_sizes[-1], activation=output_activation)
 
 def get_policy(action_space):
+    # returns discreete or continuous policy function
     policy = None
     if isinstance(action_space, Box):
         policy = mlp_gaussian_policy
@@ -63,14 +65,14 @@ def mlp_gaussian_policy(x, a, hidden_sizes, activation, output_activation, actio
 
 
 
+
+# Logger Class for printing
+
 def get_stats(x):
+    # computers mean, standard deviation, min and max of an array
     mean = np.sum(x) / len(x)
     std = np.sqrt(np.sum(x-mean)**2 / len(x))
     return [mean, std, np.max(x), np.min(x)]
-
-
-
-# Logger Class for printing
 
 class Logger:
     def __init__(self):
@@ -99,10 +101,7 @@ class Logger:
 # Buffer Class for storing trajectories experience
 
 class Buffer:
-    """
-    uses Generalized Advantage Estimation (GAE-Lambda) for calculating the advantages of state-action pairs.
-    """
-
+    # uses Generalized Advantage Estimation (GAE-Lambda) for calculating the advantages of state-action pairs.
     def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
         self.obs_buf = np.zeros(combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(combined_shape(size, act_dim), dtype=np.float32)
@@ -127,11 +126,9 @@ class Buffer:
         self.ptr += 1
 
     def finish_path(self, last_val=0):
-        """
-        aprox with GAE-Lambda the  advantage and rewards-to-go to use as targets in case of tracjectory cut off
-        last_val = 0,       if agent reached done
-                   V(s_T),  otherwise
-        """
+        # aprox with GAE-Lambda the  advantage and rewards-to-go to use as targets in case of tracjectory cut off
+        # last_val = 0 if agent reached done, otherwise V(s_T)
+
         path_slice = slice(self.path_start_idx, self.ptr)
         rews = np.append(self.rew_buf[path_slice], last_val)
         vals = np.append(self.val_buf[path_slice], last_val)
@@ -146,9 +143,8 @@ class Buffer:
         self.path_start_idx = self.ptr
 
     def get(self):
-        """
-        returns all data from buffer with advantages normalized
-        """
+        # returns all data from buffer with normalized advantages
+
         assert self.ptr == self.max_size    # is buffer full ?
         self.ptr, self.path_start_idx = 0, 0
 
@@ -159,10 +155,8 @@ class Buffer:
         return [self.obs_buf, self.act_buf, self.adv_buf, self.ret_buf, self.logp_buf]
 
     def discount_cumsum(self, x, discount):
-        """
-        computes discounted cumulative sums of vectors.
-        input:  [x0, ..., xn-1, xn]
-        output: [..., xn-2 + d*xn-1 + d^2*xn, xn-1 + d*xn, xn]
-        """
+        # computes discounted cumulative sums of vectors.
+        # input:  [x0, ..., xn-1, xn]
+        # output: [..., xn-2 + d*xn-1 + d^2*xn, xn-1 + d*xn, xn]
         return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
