@@ -20,9 +20,11 @@ class Network:
         # Inputs to computation graph
         self.x_ph, self.a_ph = placeholders_from_spaces(obs_space, act_space)
         self.adv_ph, self.ret_ph, self.logp_ph = placeholders(None, None, None)
+
         # easy retrieve [obs, actions, advantage, returns, logprob]
         self.all_phs = [self.x_ph, self.a_ph, self.adv_ph, self.ret_ph, self.logp_ph]
 
+        # Policy and Value function
         policy = get_policy(act_space)
         self.pi, self.logp, self.logp_pi = policy(self.x_ph, self.a_ph, hidden_sizes, activation, output_activation, act_space)
         self.v = tf.squeeze( mlp(self.x_ph, list(hidden_sizes)+[1], activation, None), axis=1)
@@ -30,7 +32,7 @@ class Network:
         # easy retrieve [action, value, and logprob]
         self.get_action_ops = [self.pi, self.v, self.logp_pi]
 
-        # vpg objectives
+        # VPG objectives
         self.pi_loss = -tf.reduce_mean(self.logp * self.adv_ph)
         self.v_loss = tf.reduce_mean((self.ret_ph - self.v)**2)
 

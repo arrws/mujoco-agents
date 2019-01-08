@@ -114,6 +114,8 @@ def ppo(env_name, kwargs=dict(), steps_per_epoch=4000, epochs=50, gamma=0.99, cl
 
     for epoch in range(epochs):
         render_env = True
+
+        #collect experience
         for step in range(steps_per_epoch):
             if render_env:
                 env.render()
@@ -132,7 +134,7 @@ def ppo(env_name, kwargs=dict(), steps_per_epoch=4000, epochs=50, gamma=0.99, cl
                 # if trajectory didn't reach terminal state, bootstrap value target
                 last_val = r if done else sess.run(net.v, feed_dict={net.x_ph: obs.reshape(1,-1)})
 
-                # compute cummulative returns
+                # estimate advantages
                 buf.finish_path(last_val)
 
                 # print and log
