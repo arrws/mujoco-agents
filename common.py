@@ -35,6 +35,14 @@ def mlp(x, hidden_sizes=(32,), activation=tf.tanh, output_activation=None):
         x = tf.layers.dense(x, units=h, activation=activation)
     return tf.layers.dense(x, units=hidden_sizes[-1], activation=output_activation)
 
+
+
+# POLICY FUNCTION
+# returns [pi, logp, log_pi]
+# pi        samples actions from policy given states
+# logp      gives log prob of actions given states
+# logp_pi   gives log prob of the actions sampled from pi
+
 def get_policy(action_space):
     # returns discreete or continuous policy function
     policy = None
