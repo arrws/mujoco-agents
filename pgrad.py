@@ -116,7 +116,6 @@ def train(env_name='CartPole-v0', hidden_sizes=[32], lr=1e-2, epochs=5, batch_si
 
 
 if __name__ == '__main__':
-    print('\nVanilla Policy Gradient.\n')
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', type=str, default='CartPole-v0')
     parser.add_argument('--render', type=bool, default=True)
