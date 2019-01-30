@@ -1,6 +1,6 @@
-Policy-based agents (single threaded versions) from SpinningUP :
+some policy-based (single threaded) agents from [SpinningUP](https://github.com/openai/spinningup) :
 * VPG: Vanilla Policy Gradient
 * PPO: Proximal Policy Optimization
 * SAC: Soft Actor-Critic
-tested on CartPole
 
+ran on Cartpole
